@@ -52,6 +52,9 @@ char* sympathf(char* path)
   chsub(sym, '.', '_');
   chsub(sym, '-', '_');
   chsub(sym, '~', '_');
+  chsub(sym, ' ', '_');
+  // TODO: make it to be able to substitute all the characters above in
+  // one funcall.
 
   return sym;
 }
@@ -95,9 +98,9 @@ int main(int argc, char** argv)
     fprintf(target, "# file %s\n", pathv[i]);
     fprintf(target, ".global %s\n", sym);
     fprintf(target, ".global %s_size\n", sym);
-    fprintf(target, ".align 4\n");
+    //fprintf(target, ".align 4\n"); // why did I thought i need theese?
     fprintf(target, "%s: .incbin \"%s\"\n", sym, pathv[i]);
-    fprintf(target, ".align 4\n");
+    //fprintf(target, ".align 4\n");
     fprintf(target, "%s_size: .quad %lli\n\n",
         sym, (long long int)fsize(pathv[i]));
     free(sym);
