@@ -1,112 +1,198 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>
+#include <getopt.h>
 #include <string.h>
-#include <errno.h>
 #include <libgen.h>
-#include <sys/types.h>
+#include <errno.h>
 #include <sys/stat.h>
 
-void fputs_wrap_nl(FILE* dest, const char* string, int wrap_point)
-{ // Didn't find use for this fun
-  int len = strlen(string);
-  size_t i = 0;
-  size_t spacept = 0;
-  char buf[wrap_point + 1];
+typedef enum OutFormat {
+  OUTF_C,
+  OUTF_GAS
+} OutFormat;
 
-  buf[wrap_point + 1] = 0;
-  while(i < len) {
-    for(; i < wrap_point; i++) {
-      if(string[i] == ' ') {
-        spacept = i;
-      }
+bool y_or_n_p(const char* question, bool y_default)
+{ // Yes-or-No prompt. If y_default is true, pressing enter counts as 'Yes',
+  // otherwise - as 'No'
+  char ch;
+  const char* pr;
+
+  if(y_default)
+    pr = "[Y/n]";
+  else
+    pr = "[y/N]";
+  printf("%s %s: ", question, pr);
+  while(true) {
+    ch = getchar();
+    switch(ch)
+    {
+      case 'y':
+      case 'Y':
+        return true;
+      case 'n':
+      case 'N':
+        return false;
+      case '\n':
+        if(y_default)
+          return true;
+        else
+          return false;
+      default:
+        printf("\nSorry, try again: ");
+        break;
     }
-    strncpy(buf, string, wrap_point % spacept);
-    fputs(buf, dest);
-    fputc('\n', dest);
-    i = spacept + 1;
   }
 }
 
-void chsub(char* string, char c1, char c2) 
-{ // Replace each c1 with c2 in string
-  int i;
-  size_t len = strlen(string);
+void dashelp(char* progname)
+{ // Print help message and exit
+  printf(
+      "Usage: %s [-h|--help]\n"
+      "       %s [[-o|--out] <out-file>] [[-t|--type] <output-type>] " 
+              "<files...>\n\n"
+      " -h --help  - show this help message\n"
+      " -o --out   - write to <out-file> instead of stdout"
+      " -t --type  - set output type to <output-type>, which can be `c' or "
+                     "`gas'.",
+      progname, progname);
+  exit(1);
+}
 
-  for(i = 0; i < len; i++) {
-    if(string[i] == c1) {
-      string[i] = c2;
-    }
+void chsub(char* s, char ch1, char ch2)
+{ // Substitute each ch1 in string with ch2
+  size_t len = strlen(s);
+
+  for(int i = 0; i < len; i++) {
+    if(s[i] == ch1)
+      s[i] = ch2;
   }
 }
 
 char* sympathf(char* path)
-{ // Make symbol from filename
-  char* sym;
+{ // Make symbol from pathname. Returned pointer is free'able.
+  char* sym = NULL;
 
   sym = malloc(strlen(basename(path)) + 1);
   if(sym == NULL) {
-    fprintf(stderr, "sympathf error: %s", strerror(errno));
-    exit(-1);
+    fprintf(stderr, "error in sympathf: %s\n", strerror(errno));
+    exit(1);
   }
   strcpy(sym, basename(path));
   chsub(sym, '.', '_');
   chsub(sym, '-', '_');
   chsub(sym, '~', '_');
   chsub(sym, ' ', '_');
-  // TODO: make it to be able to substitute all the characters above in
-  // one funcall.
 
   return sym;
 }
 
-off_t fsize(const char* path)
-{ // Get file size
+FILE* freopen_wpie(const char* path, FILE* stream)
+{ // Create file or open for writing after prompting user if exists already
+  errno = 0;
   struct stat st;
-
   if(stat(path, &st) == 0) {
-    return st.st_size;
+    if(S_ISREG(st.st_mode)) {
+      if(!y_or_n_p("File already exists, overwrite?", false))
+        exit(1);
+    } else {
+      fprintf(stderr, "Error: %s is a directory or special file", path);
+      exit(1);
+    }
+  } else if(errno != ENOENT) {
+      fprintf(stderr, "Error when opening file: %s", strerror(errno));
+      exit(1);
   }
-  fprintf(stderr, "Unable to determine size of \"%s\": %s (errno %i)\n",
-      path, strerror(errno), errno);
-  return -1;
+  stream = freopen(path, "w", stream);
+  if(errno != 0) {
+    printf("error in `freopen_wpie': %s\n", strerror(errno));
+    exit(1);
+  }
+  return stream;
+}
+
+void print_res_block_c(FILE* out, char* path)
+{ // Outputs to `out' definions and incbin for resource at `path'.
+  char* sym;
+  sym = sympathf(path);
+  fprintf(out,
+        "// file %s\n"
+        "extern char res_%s[];\n"
+        "extern size_t res_%s_len;\n"
+        "asm(\n"
+        "  \".data\\n\"\n"
+        "  \".global res_%s\\n\"\n"
+        "  \".global res_%s_len\\n\"\n"
+        "  \"res_%s:\\n\"\n"
+        "  \"  .incbin \\\"%s\\\"\\n\"\n"
+        "  \"res_%s_len:\\n\"\n"
+        "  \"  .quad .-res_%s\\n\"\n"
+        ");\n\n",
+        path, sym, sym, sym, sym, sym, path, sym, sym
+        );
+  free(sym);
 }
 
 int main(int argc, char** argv)
-{ // Program entry point commented obviously
-  int i;
-  FILE* target;
-  int pathc = argc - 2;
-  char** pathv = argv + 2;
-  char* sym;
+{
+  FILE* out = stdout;
+  OutFormat f = OUTF_C;
+  
+  puts("started...");
+  
+  if(argc <= 1)
+    dashelp(argv[0]);
+  while(1) { // Get options
+    static struct option opts[] =
+    {
+      { "help", no_argument, NULL, 'h' },
+      { "out", required_argument, NULL, 'o' },
+      { "type", required_argument, NULL, 't' },
+      { NULL, 0, NULL, 0 }
+    };
+    int opti;
+    int c;
 
-  if(argc < 3) {
-    printf("Usage: %s [target] [file] <files...>\n", argv[0]);
-    return -1;
+    if((c = getopt_long(argc, argv, "ho:t:", opts, &opti)) == -1)
+      break;
+    switch(c)
+    {
+      case 'h':
+        dashelp(argv[0]);
+        exit(0);
+      case 'o':
+        out = freopen_wpie(optarg, out);
+        break;
+      case 't':
+        if(strcmp(optarg, "c") == 0)
+          f = OUTF_C;
+        else if(strcmp(optarg, "gas") == 0)
+          f = OUTF_GAS;
+        else {
+          fprintf(stderr, "Wrong output type. "
+              "Can only be either `c' or `gas'\n");
+          exit(1);
+        }
+        break;
+    }
   }
-  errno = 0;
-  if(strcmp(argv[1], "stdout") == 0) {
-    target = stdout;
-  } else {
-    target = fopen(argv[1], "w");
+  switch(f)
+  {
+    case OUTF_GAS: // TODO, obviously >___>
+      printf("Woops, gas format has yet to be implemented~ =^д^=\n");
+      exit(1);
+    case OUTF_C:
+      fprintf(out,
+          "// Generated by DOTOIFY to be compiled with gcc or compatible "
+          "compiler.\n"
+          "#include <stddef.h>\n\n"
+          );
+      while(optind < argc) {
+        print_res_block_c(out, argv[optind++]);
+      }
   }
-  fprintf(target, "# This file was generated by DOTOIFY utility\n"
-                  "# to be compiled with GNU Assembler like this:\n"
-                  "#   gcc -c %s\n\n", argv[1]);
-  fprintf(target, ".data\n");
-  for(i = 0; i < pathc; i++) {
-    sym = sympathf(pathv[i]);
-    fprintf(target, "# file %s\n", pathv[i]);
-    fprintf(target, ".global %s\n", sym);
-    fprintf(target, ".global %s_size\n", sym);
-    //fprintf(target, ".align 4\n"); // why did I thought i need theese?
-    fprintf(target, "%s: .incbin \"%s\"\n", sym, pathv[i]);
-    //fprintf(target, ".align 4\n");
-    fprintf(target, "%s_size: .quad %lli\n\n",
-        sym, (long long int)fsize(pathv[i]));
-    free(sym);
-  }
-  if(target != stdout) {
-    fclose(target);
-  }
+  if(out != stdout)
+    fclose(out);
+
   return 0;
 }
