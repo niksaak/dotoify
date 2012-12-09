@@ -4,10 +4,10 @@ _simple tool to pack various resources into binary_
 Want to include some cute pictures or other things into your executable
 but don't want to generate megabytes of junk with `xdd -i`, nor willing
 to use large and bloated IDEs just for it? Then __*.o-ify__ is your
-choise! It can generate .c or .s_<sup>1</sup>_ files that can be 
+choise! It can generate .c or .s<i><sup>1</sup></i> files that can be 
 compiled with _gcc_ and linked with your app!
 
-_<sup>1</sup> Note: to be implemented (^д^')_
+_<sup>1</sup> to be implemented (^w^')_
 
 ## Usage
 
